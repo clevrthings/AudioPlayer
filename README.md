@@ -4,6 +4,10 @@
 
 Fast, visual, and routing-focused desktop playback for creators and audio professionals.
 
+[Download macOS DMG](https://github.com/clevrthings/AudioPlayer/releases/download/v0.0.1/AudioPlayer-0.0.1-mac.dmg)
+
+Created and tested on macOS 15.6.1.
+
 ## Why this player
 
 - Large, responsive waveform view for accurate navigation
@@ -60,3 +64,7 @@ Note: playback support for some compressed formats can depend on the OS multimed
 
 ### Audio routing matrix
 ![Audio routing matrix](assets/screenshots/preferences-audio-routing.png)
+
+---
+
+Support the project: https://buymeacoffee.com/clevrthings
