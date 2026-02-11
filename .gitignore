@@ -17,3 +17,6 @@ dist/
 # IDE
 .vscode/
 .idea/
+
+# Local secrets
+.env

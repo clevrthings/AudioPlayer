@@ -1,54 +1,54 @@
-# Audio Player (macOS-ready)
+# Audio Player
 
-Een strakke desktop audio player in Python met:
+A modern desktop audio player focused on fast navigation, clear waveform visualization, and flexible routing.
 
-- Meerdere audiofiles openen in een playlist
-- Gevulde waveform met live playhead
-- Asynchroon/progressief waveform laden (zonder UI-freeze)
-- Achtergrond preloading + caching van andere tracks
-- Bestanden openen via drag-and-drop op venster of app-icoon (macOS)
-- Seek via playhead (klik/sleep)
-- Zoom `+` / `-` rechtsonder onder de waveform
-- Volledige file direct passend in beeld bij selectie
-- Tijdas onderaan in minuten/seconden (`mm:ss`)
-- Bestandsinfo met nette tekst-wrap (ook bij lange namen)
-- Transport controls gecentreerd bovenaan
-- Spatiebalk voor play/pauze
-- Thema-knop rechtsboven met Licht/Donker/Systeem
-- Compact, lang venster (resizable)
+## Core Features
 
-## 1. Installatie
+- Open one or many audio files into a playlist
+- Drag and drop files onto the window or app icon (macOS)
+- Progressive waveform loading with background preloading and caching
+- Filled waveform rendering with a moving playhead
+- Zoom in/out and instant **Fit** to show the full track
+- Timeline in `mm:ss` format
+- Track metadata panel (file name, format, duration, sample rate, channels, file size)
+- Keyboard-first control support (play/pause, stop, track switching, delete selected track)
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+## Playback and Playlist
 
-## 2. Starten
+- Centered transport controls: previous, play/pause, next, stop
+- Repeat modes: off, repeat one, repeat all
+- Auto-continue toggle for advancing to the next track
+- Optional playhead-follow mode while playing
+- Reorder playlist with drag-and-drop
+- Remove tracks via button or keyboard shortcut
+- Sort playlist by name or duration
 
-```bash
-python app.py
-```
+## Waveform
 
-## 3. Standalone mac app build
+- Full-track overview on selection
+- Seek by clicking or dragging on the waveform
+- Configurable waveform display mode (combined waveform or separate channels)
+- Adjustable waveform resolution in settings
 
-Voor een `.app` bundle kun je PyInstaller gebruiken:
+## Appearance and UX
 
-```bash
-pip install pyinstaller
-pyinstaller --noconfirm --clean --windowed --name AudioPlayer \
-  --icon assets/AudioPlayer.icns \
-  --add-data "assets/app_icon.png:assets" \
-  app.py
-```
+- Light, dark, and system theme modes
+- Accent color customization
+- Playhead color and thickness customization
+- Compact, resizable layout optimized for wide/tall workflows
+- About and Preferences in the macOS menu bar
+- Preferences include an **Apply** button to apply changes without closing the window
 
-Output staat in:
+## Feedback from the App
 
-- `dist/AudioPlayer.app`
+- Users can report bugs or request features directly from Preferences
+- Reports are posted as GitHub Issues to `clevrthings/AudioPlayer`
+- Supports guest submissions (no GitHub account required for end users)
+- Posting uses a central token loaded from `.env`:
+- `AUDIOPLAYER_GITHUB_TOKEN=...`
 
-## Opmerking over audio-formaten
+## Audio and Routing
 
-- Waveform + metadata worden uitgelezen via `soundfile` (libsndfile).
-- Playback gaat via Qt Multimedia.
-- Op macOS werken WAV/AIFF/FLAC meestal direct; voor sommige gecomprimeerde formaten kan codec-support afhangen van je systeem.
+- Output device selection
+- Routing matrix for mapping input channels to output channels
+- Support for layouts up to 7.1.4 (12 channels)

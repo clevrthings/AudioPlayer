@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import sys
 import tempfile
 import textwrap
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,16 +53,74 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QLineEdit,
     QScrollArea,
     QSizePolicy,
     QSplitter,
     QStyle,
     QTabWidget,
+    QTextEdit,
     QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+
+def _parse_dotenv_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    return value
+
+
+def _load_dotenv_file(path: Path) -> None:
+    if not path.is_file():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:  # noqa: BLE001
+        return
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("export "):
+            stripped = stripped[7:].strip()
+        if "=" not in stripped:
+            continue
+        key, raw_value = stripped.split("=", 1)
+        env_key = key.strip()
+        if not env_key:
+            continue
+        env_value = _parse_dotenv_value(raw_value)
+        os.environ.setdefault(env_key, env_value)
+
+
+def _load_dotenv() -> None:
+    candidates: list[Path] = []
+    try:
+        candidates.append(Path.cwd() / ".env")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        candidates.append(Path(__file__).resolve().parent / ".env")
+    except Exception:  # noqa: BLE001
+        pass
+    if sys.argv and sys.argv[0]:
+        try:
+            candidates.append(Path(sys.argv[0]).resolve().parent / ".env")
+        except Exception:  # noqa: BLE001
+            pass
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        _load_dotenv_file(candidate)
 
 
 def format_axis_time(seconds: float) -> str:
@@ -114,6 +175,11 @@ ROUTING_CHANNEL_LABELS = (
 )
 
 APP_VERSION = "0.0.1"
+GITHUB_REPO = "clevrthings/AudioPlayer"
+GITHUB_ISSUES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
+# Optional app token for posting issues on behalf of users (guest mode).
+# Prefer environment variable AUDIOPLAYER_GITHUB_TOKEN to avoid committing secrets.
+GITHUB_APP_ISSUE_TOKEN = ""
 
 
 class WaveformJob(QThread):
@@ -461,6 +527,10 @@ class WaveformPlayer(QMainWindow):
         self._effective_audio_route_note = ""
         self._audio_matrix_enabled = False
         self._audio_routing_matrix = self._default_routing_matrix()
+        self._issue_api_token = (
+            os.getenv("AUDIOPLAYER_GITHUB_TOKEN", "").strip()
+            or GITHUB_APP_ISSUE_TOKEN.strip()
+        )
         self._wave_top_color = QColor("#72cfff")
         self._wave_bottom_color = QColor("#49a9de")
         self._wave_fill_color = QColor(93, 183, 234, 110)
@@ -1710,6 +1780,201 @@ class WaveformPlayer(QMainWindow):
 
         dialog.exec()
 
+    def _post_github_issue(
+        self,
+        issue_kind: str,
+        title: str,
+        details: str,
+        reporter_name: str,
+        guest_mode: bool,
+    ) -> tuple[bool, str, str]:
+        auth_token = self._issue_api_token or os.getenv("AUDIOPLAYER_GITHUB_TOKEN", "").strip()
+        if not auth_token:
+            return (
+                False,
+                self._txt(
+                    "Issue-posting is niet geconfigureerd. Voeg AUDIOPLAYER_GITHUB_TOKEN toe in .env of stel GITHUB_APP_ISSUE_TOKEN in.",
+                    "Issue posting is not configured. Add AUDIOPLAYER_GITHUB_TOKEN in .env or set GITHUB_APP_ISSUE_TOKEN.",
+                ),
+                "",
+            )
+
+        clean_title = title.strip()
+        clean_details = details.strip()
+        clean_reporter = reporter_name.strip()
+        reporter = self._txt("Gast", "Guest") if guest_mode else (clean_reporter or self._txt("Onbekend", "Unknown"))
+        if not clean_title or not clean_details:
+            return (
+                False,
+                self._txt("Titel en beschrijving zijn verplicht.", "Title and description are required."),
+                "",
+            )
+
+        issue_label = "bug" if issue_kind == "bug" else "enhancement"
+        prefix = "Bug" if issue_kind == "bug" else "Feature"
+        payload = {
+            "title": f"[{prefix}] {clean_title}",
+            "body": (
+                f"{clean_details}\n\n---\n"
+                f"Submitted from Audio Player {APP_VERSION}\n"
+                f"Language: {self._language}\n"
+                f"Reporter: {reporter}"
+            ),
+            "labels": [issue_label, "from-app"],
+        }
+
+        req = urllib.request.Request(
+            GITHUB_ISSUES_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {auth_token}",
+                "User-Agent": "AudioPlayer-App",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "Content-Type": "application/json",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                data = json.loads(raw) if raw else {}
+                url = str(data.get("html_url", ""))
+                return True, self._txt("Issue succesvol geplaatst.", "Issue created successfully."), url
+        except urllib.error.HTTPError as exc:
+            raw = ""
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                raw = ""
+            message = ""
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    message = str(parsed.get("message", "")).strip()
+                except Exception:  # noqa: BLE001
+                    message = raw.strip()
+            if not message:
+                message = str(exc)
+            return (
+                False,
+                self._txt(
+                    f"GitHub weigerde de aanvraag: {message}",
+                    f"GitHub rejected the request: {message}",
+                ),
+                "",
+            )
+        except Exception as exc:  # noqa: BLE001
+            return (
+                False,
+                self._txt(
+                    f"Kon issue niet posten: {exc}",
+                    f"Could not post issue: {exc}",
+                ),
+                "",
+            )
+
+    def open_feedback_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self._txt("Meld een probleem of feature", "Report issue or feature"))
+        dialog.setMinimumWidth(700)
+        dialog.resize(760, 540)
+
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            self._txt(
+                "Maak direct een GitHub issue aan voor bugs of feature requests.",
+                "Create a GitHub issue directly for bugs or feature requests.",
+            )
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        form = QFormLayout()
+        issue_type_combo = QComboBox()
+        issue_type_combo.addItem(self._txt("Bug / probleem", "Bug / problem"), "bug")
+        issue_type_combo.addItem(self._txt("Feature request", "Feature request"), "feature")
+        form.addRow(self._txt("Type", "Type"), issue_type_combo)
+
+        title_edit = QLineEdit()
+        title_edit.setPlaceholderText(self._txt("Korte titel", "Short title"))
+        form.addRow(self._txt("Titel", "Title"), title_edit)
+
+        details_edit = QTextEdit()
+        details_edit.setPlaceholderText(
+            self._txt(
+                "Beschrijf het probleem of je gewenste feature zo concreet mogelijk.",
+                "Describe the problem or requested feature as clearly as possible.",
+            )
+        )
+        details_edit.setMinimumHeight(220)
+        form.addRow(self._txt("Beschrijving", "Description"), details_edit)
+
+        guest_checkbox = QCheckBox(self._txt("Verstuur als gast", "Submit as guest"))
+        guest_checkbox.setChecked(True)
+        form.addRow("", guest_checkbox)
+
+        reporter_edit = QLineEdit()
+        reporter_edit.setPlaceholderText(self._txt("Naam (optioneel)", "Name (optional)"))
+        reporter_edit.setEnabled(False)
+        form.addRow(self._txt("Naam", "Name"), reporter_edit)
+
+        def _update_reporter_edit(enabled_as_named: bool) -> None:
+            reporter_edit.setEnabled(not enabled_as_named)
+            if enabled_as_named:
+                reporter_edit.setText("")
+
+        guest_checkbox.toggled.connect(_update_reporter_edit)
+
+        layout.addLayout(form)
+
+        helper = QLabel(
+            self._txt(
+                "Repository: clevrthings/AudioPlayer",
+                "Repository: clevrthings/AudioPlayer",
+            )
+        )
+        helper.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(helper)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        submit_button = button_box.button(QDialogButtonBox.StandardButton.Ok)
+        if submit_button is not None:
+            submit_button.setText(self._txt("Post naar GitHub", "Post to GitHub"))
+            submit_button.setDefault(True)
+        cancel_button = button_box.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_button is not None:
+            cancel_button.setText(self._txt("Annuleren", "Cancel"))
+        layout.addWidget(button_box)
+
+        def submit_feedback() -> None:
+            issue_kind = str(issue_type_combo.currentData() or "bug")
+            title = title_edit.text().strip()
+            details = details_edit.toPlainText().strip()
+            guest_mode = guest_checkbox.isChecked()
+            reporter_name = reporter_edit.text().strip()
+
+            ok, message, issue_url = self._post_github_issue(
+                issue_kind,
+                title,
+                details,
+                reporter_name,
+                guest_mode,
+            )
+            if not ok:
+                QMessageBox.warning(dialog, self._txt("Issue posten mislukt", "Issue post failed"), message)
+                return
+
+            if issue_url:
+                message = f"{message}\n{issue_url}"
+            QMessageBox.information(dialog, self._txt("Issue gepost", "Issue posted"), message)
+            dialog.accept()
+
+        button_box.accepted.connect(submit_feedback)
+        button_box.rejected.connect(dialog.reject)
+        dialog.exec()
+
     def open_settings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle(self._txt("Voorkeuren", "Preferences"))
@@ -1847,6 +2112,10 @@ class WaveformPlayer(QMainWindow):
                 selected_width_index = idx
         playhead_width_combo.setCurrentIndex(selected_width_index)
         general_form.addRow(self._txt("Playhead dikte", "Playhead thickness"), playhead_width_combo)
+
+        report_button = QPushButton(self._txt("Probleem melden / Feature aanvragen", "Report issue / Request feature"))
+        report_button.clicked.connect(self.open_feedback_dialog)
+        general_form.addRow("", report_button)
 
         output_device_combo = QComboBox()
         output_devices = self._audio_output_devices()
@@ -2076,32 +2345,42 @@ class WaveformPlayer(QMainWindow):
         defaults_form.addRow("", follow_checkbox)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
+        apply_button = button_box.addButton(self._txt("Toepassen", "Apply"), QDialogButtonBox.ButtonRole.ApplyRole)
         layout.addWidget(button_box)
 
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
+        def apply_settings(close_dialog: bool) -> None:
+            self._language = str(language_combo.currentData())
+            self._accent_color = accent_color.name()
+            self._playhead_color = playhead_color if playhead_color and QColor(playhead_color).isValid() else ""
+            self._playhead_width = max(1.0, min(float(playhead_width_combo.currentData()), 6.0))
+            self._default_theme_mode = str(theme_combo.currentData())
+            self._default_repeat_mode = str(repeat_combo.currentData())
+            self._default_auto_continue_enabled = auto_next_checkbox.isChecked()
+            self._default_follow_playhead = follow_checkbox.isChecked()
+            self._audio_output_device_key = str(output_device_combo.currentData() or "").strip().lower()
+            self._audio_routing_mode = str(routing_combo.currentData() or "auto")
+            self._audio_matrix_enabled = matrix_enabled_checkbox.isChecked()
+            self._audio_routing_matrix = self._clone_routing_matrix(matrix_values_from_ui())
+            self._set_waveform_resolution(int(resolution_combo.currentData()), save=False)
+            self._set_waveform_view_mode(str(waveform_view_combo.currentData()), save=False)
+            self._apply_audio_preferences(update_status=False)
+            self._save_preferences()
+            self._apply_language()
+            self._apply_effective_theme()
+            if close_dialog:
+                dialog.accept()
 
-        self._language = str(language_combo.currentData())
-        self._accent_color = accent_color.name()
-        self._playhead_color = playhead_color if playhead_color and QColor(playhead_color).isValid() else ""
-        self._playhead_width = max(1.0, min(float(playhead_width_combo.currentData()), 6.0))
-        self._default_theme_mode = str(theme_combo.currentData())
-        self._default_repeat_mode = str(repeat_combo.currentData())
-        self._default_auto_continue_enabled = auto_next_checkbox.isChecked()
-        self._default_follow_playhead = follow_checkbox.isChecked()
-        self._audio_output_device_key = str(output_device_combo.currentData() or "").strip().lower()
-        self._audio_routing_mode = str(routing_combo.currentData() or "auto")
-        self._audio_matrix_enabled = matrix_enabled_checkbox.isChecked()
-        self._audio_routing_matrix = self._clone_routing_matrix(matrix_values_from_ui())
-        self._set_waveform_resolution(int(resolution_combo.currentData()), save=False)
-        self._set_waveform_view_mode(str(waveform_view_combo.currentData()), save=False)
-        self._apply_audio_preferences(update_status=False)
+        def on_accept() -> None:
+            apply_settings(close_dialog=True)
 
-        self._save_preferences()
-        self._apply_language()
-        self._apply_effective_theme()
+        def on_apply() -> None:
+            apply_settings(close_dialog=False)
+
+        button_box.accepted.connect(on_accept)
+        button_box.rejected.connect(dialog.reject)
+        apply_button.clicked.connect(on_apply)
+
+        dialog.exec()
 
     def _set_waveform_resolution(self, points: int, save: bool = True) -> None:
         points = max(1200, min(int(points), 24000))
@@ -3640,6 +3919,7 @@ def _resource_path(*parts: str) -> Path:
 
 
 def main() -> None:
+    _load_dotenv()
     QApplication.setApplicationName("Audio Player")
     QApplication.setApplicationDisplayName("Audio Player")
     if sys.argv:
