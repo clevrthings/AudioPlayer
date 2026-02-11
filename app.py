@@ -187,6 +187,7 @@ ROUTING_CHANNEL_LABELS = (
 APP_VERSION = "0.0.1"
 FEEDBACK_WORKER_ENV_URL = "AUDIOPLAYER_FEEDBACK_WORKER_URL"
 FEEDBACK_WORKER_ENV_KEY = "AUDIOPLAYER_FEEDBACK_WORKER_KEY"
+FEEDBACK_WORKER_DEFAULT_URL = "https://audioplayer-issue-poster.clevrthings.workers.dev/report"
 
 
 class WaveformJob(QThread):
@@ -534,7 +535,7 @@ class WaveformPlayer(QMainWindow):
         self._effective_audio_route_note = ""
         self._audio_matrix_enabled = False
         self._audio_routing_matrix = self._default_routing_matrix()
-        self._feedback_worker_url = os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip()
+        self._feedback_worker_url = os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip() or FEEDBACK_WORKER_DEFAULT_URL
         self._feedback_worker_key = os.getenv(FEEDBACK_WORKER_ENV_KEY, "").strip()
         self._wave_top_color = QColor("#72cfff")
         self._wave_bottom_color = QColor("#49a9de")
@@ -1793,13 +1794,13 @@ class WaveformPlayer(QMainWindow):
         reporter_name: str,
         guest_mode: bool,
     ) -> tuple[bool, str, str]:
-        worker_url = self._feedback_worker_url or os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip()
+        worker_url = self._feedback_worker_url or os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip() or FEEDBACK_WORKER_DEFAULT_URL
         if not worker_url:
             return (
                 False,
                 self._txt(
-                    "Feedback service is niet geconfigureerd. Voeg AUDIOPLAYER_FEEDBACK_WORKER_URL toe in .env.",
-                    "Feedback service is not configured. Add AUDIOPLAYER_FEEDBACK_WORKER_URL in .env.",
+                    "Feedback service is niet geconfigureerd.",
+                    "Feedback service is not configured.",
                 ),
                 "",
             )
