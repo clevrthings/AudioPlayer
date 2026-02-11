@@ -100,6 +100,12 @@ def _load_dotenv_file(path: Path) -> None:
 
 def _load_dotenv() -> None:
     candidates: list[Path] = []
+    meipass_root = str(getattr(sys, "_MEIPASS", "")).strip()
+    if meipass_root:
+        try:
+            candidates.append(Path(meipass_root) / ".env")
+        except Exception:  # noqa: BLE001
+            pass
     try:
         candidates.append(Path.cwd() / ".env")
     except Exception:  # noqa: BLE001
@@ -113,6 +119,10 @@ def _load_dotenv() -> None:
             candidates.append(Path(sys.argv[0]).resolve().parent / ".env")
         except Exception:  # noqa: BLE001
             pass
+    try:
+        candidates.append(Path(sys.executable).resolve().parent / ".env")
+    except Exception:  # noqa: BLE001
+        pass
 
     seen: set[str] = set()
     for candidate in candidates:

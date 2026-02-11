@@ -46,6 +46,7 @@ A modern desktop audio player focused on fast navigation, clear waveform visuali
 - Supports guest submissions (no GitHub account required for end users)
 - Posting uses a central token loaded from `.env`:
 - `AUDIOPLAYER_GITHUB_TOKEN=...`
+- When creating the standalone app, `.env` is bundled automatically if present at build time
 
 ## Audio and Routing
 
