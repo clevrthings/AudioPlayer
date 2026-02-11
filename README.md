@@ -1,5 +1,7 @@
 # Audio Player
 
+![Stereo waveform in dark theme](assets/screenshots/main-dark-stereo.png)
+
 Fast, visual, and routing-focused desktop playback for creators and audio professionals.
 
 ## Why this player
