@@ -1,65 +1,60 @@
 # Audio Player
 
-A modern desktop audio player focused on fast navigation, clear waveform visualization, and flexible routing.
+Fast, visual, and routing-focused desktop playback for creators and audio professionals.
 
-## Core Features
+## Why this player
 
-- Open one or many audio files into a playlist
-- Drag and drop files onto the window or app icon (macOS)
+- Large, responsive waveform view for accurate navigation
+- Smooth seeking with live playhead tracking
+- Powerful channel routing with matrix control up to 7.1.4 (12 channels)
+- Built for long sessions with multi-file playlists and fast switching
+
+## Waveform-first experience
+
 - Progressive waveform loading with background preloading and caching
-- Filled waveform rendering with a moving playhead
-- Zoom in/out and instant **Fit** to show the full track
-- Timeline in `mm:ss` format
-- Track metadata panel (file name, format, duration, sample rate, channels, file size)
-- Keyboard-first control support (play/pause, stop, track switching, delete selected track)
+- Full-track **Fit** view on selection
+- Click or drag anywhere in the waveform to seek instantly
+- Zoom in/out for precision editing-style navigation
+- Combined waveform or separate per-channel waveform view
 
-## Playback and Playlist
+## Advanced audio routing
 
-- Centered transport controls: previous, play/pause, next, stop
-- Repeat modes: off, repeat one, repeat all
-- Auto-continue toggle for advancing to the next track
-- Optional playhead-follow mode while playing
-- Reorder playlist with drag-and-drop
-- Remove tracks via button or keyboard shortcut
-- Sort playlist by name or duration
+- Select your output device directly in the app
+- Route input channels to output channels via a routing matrix
+- Works with stereo, surround, and immersive layouts
+- Supports channel layouts up to **7.1.4 (12 channels)**
 
-## Waveform
+## Supported file formats
 
-- Full-track overview on selection
-- Seek by clicking or dragging on the waveform
-- Configurable waveform display mode (combined waveform or separate channels)
-- Adjustable waveform resolution in settings
+- WAV / WAVE
+- FLAC
+- OGG
+- AIFF / AIF
+- MP3
+- M4A
+- AAC
+- WMA
 
-## Appearance and UX
+Note: playback support for some compressed formats can depend on the OS multimedia backend.
 
-- Light, dark, and system theme modes
-- Accent color customization
-- Playhead color and thickness customization
-- Compact, resizable layout optimized for wide/tall workflows
-- About and Preferences in the macOS menu bar
-- Preferences include an **Apply** button to apply changes without closing the window
+## Playlist and playback controls
 
-## Feedback from the App
-
-- Users can report bugs or request features directly from Preferences
-- Supports guest submissions (no GitHub account required for end users)
-
-## Audio and Routing
-
-- Output device selection
-- Routing matrix for mapping input channels to output channels
-- Support for layouts up to 7.1.4 (12 channels)
+- Open one or multiple files
+- Drag-and-drop files into the playlist
+- Reorder and sort tracks
+- Previous, play/pause, next, and stop controls
+- Repeat modes: off, one, all
 
 ## Screenshots
 
-### Dark theme - multichannel waveform
-![Dark theme multichannel waveform](assets/screenshots/main-dark-multichannel.png)
+### Multichannel waveform (dark theme)
+![Multichannel waveform in dark theme](assets/screenshots/main-dark-multichannel.png)
 
-### Dark theme - stereo track
-![Dark theme stereo track](assets/screenshots/main-dark-stereo.png)
+### Stereo waveform (dark theme)
+![Stereo waveform in dark theme](assets/screenshots/main-dark-stereo.png)
 
-### Light theme
-![Light theme](assets/screenshots/main-light-stereo.png)
+### Stereo waveform (light theme)
+![Stereo waveform in light theme](assets/screenshots/main-light-stereo.png)
 
-### Audio routing preferences
-![Audio routing preferences](assets/screenshots/preferences-audio-routing.png)
+### Audio routing matrix
+![Audio routing matrix](assets/screenshots/preferences-audio-routing.png)
