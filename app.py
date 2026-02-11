@@ -185,11 +185,8 @@ ROUTING_CHANNEL_LABELS = (
 )
 
 APP_VERSION = "0.0.1"
-GITHUB_REPO = "clevrthings/AudioPlayer"
-GITHUB_ISSUES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/issues"
-# Optional app token for posting issues on behalf of users (guest mode).
-# Prefer environment variable AUDIOPLAYER_GITHUB_TOKEN to avoid committing secrets.
-GITHUB_APP_ISSUE_TOKEN = ""
+FEEDBACK_WORKER_ENV_URL = "AUDIOPLAYER_FEEDBACK_WORKER_URL"
+FEEDBACK_WORKER_ENV_KEY = "AUDIOPLAYER_FEEDBACK_WORKER_KEY"
 
 
 class WaveformJob(QThread):
@@ -537,10 +534,8 @@ class WaveformPlayer(QMainWindow):
         self._effective_audio_route_note = ""
         self._audio_matrix_enabled = False
         self._audio_routing_matrix = self._default_routing_matrix()
-        self._issue_api_token = (
-            os.getenv("AUDIOPLAYER_GITHUB_TOKEN", "").strip()
-            or GITHUB_APP_ISSUE_TOKEN.strip()
-        )
+        self._feedback_worker_url = os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip()
+        self._feedback_worker_key = os.getenv(FEEDBACK_WORKER_ENV_KEY, "").strip()
         self._wave_top_color = QColor("#72cfff")
         self._wave_bottom_color = QColor("#49a9de")
         self._wave_fill_color = QColor(93, 183, 234, 110)
@@ -1790,7 +1785,7 @@ class WaveformPlayer(QMainWindow):
 
         dialog.exec()
 
-    def _post_github_issue(
+    def _post_feedback_issue(
         self,
         issue_kind: str,
         title: str,
@@ -1798,13 +1793,13 @@ class WaveformPlayer(QMainWindow):
         reporter_name: str,
         guest_mode: bool,
     ) -> tuple[bool, str, str]:
-        auth_token = self._issue_api_token or os.getenv("AUDIOPLAYER_GITHUB_TOKEN", "").strip()
-        if not auth_token:
+        worker_url = self._feedback_worker_url or os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip()
+        if not worker_url:
             return (
                 False,
                 self._txt(
-                    "Issue-posting is niet geconfigureerd. Voeg AUDIOPLAYER_GITHUB_TOKEN toe in .env of stel GITHUB_APP_ISSUE_TOKEN in.",
-                    "Issue posting is not configured. Add AUDIOPLAYER_GITHUB_TOKEN in .env or set GITHUB_APP_ISSUE_TOKEN.",
+                    "Feedback service is niet geconfigureerd. Voeg AUDIOPLAYER_FEEDBACK_WORKER_URL toe in .env.",
+                    "Feedback service is not configured. Add AUDIOPLAYER_FEEDBACK_WORKER_URL in .env.",
                 ),
                 "",
             )
@@ -1823,35 +1818,39 @@ class WaveformPlayer(QMainWindow):
         issue_label = "bug" if issue_kind == "bug" else "enhancement"
         prefix = "Bug" if issue_kind == "bug" else "Feature"
         payload = {
+            "kind": issue_label,
             "title": f"[{prefix}] {clean_title}",
-            "body": (
-                f"{clean_details}\n\n---\n"
-                f"Submitted from Audio Player {APP_VERSION}\n"
-                f"Language: {self._language}\n"
-                f"Reporter: {reporter}"
-            ),
-            "labels": [issue_label, "from-app"],
+            "details": clean_details,
+            "reporter": reporter,
+            "language": self._language,
+            "app_version": APP_VERSION,
         }
 
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "AudioPlayer-App",
+        }
+        worker_key = self._feedback_worker_key or os.getenv(FEEDBACK_WORKER_ENV_KEY, "").strip()
+        if worker_key:
+            headers["X-Feedback-Key"] = worker_key
+
         req = urllib.request.Request(
-            GITHUB_ISSUES_API_URL,
+            worker_url,
             data=json.dumps(payload).encode("utf-8"),
             method="POST",
-            headers={
-                "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {auth_token}",
-                "User-Agent": "AudioPlayer-App",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
 
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 data = json.loads(raw) if raw else {}
-                url = str(data.get("html_url", ""))
-                return True, self._txt("Issue succesvol geplaatst.", "Issue created successfully."), url
+                url = str(data.get("issue_url", ""))
+                success_message = str(data.get("message", "")).strip()
+                if not success_message:
+                    success_message = self._txt("Issue succesvol geplaatst.", "Issue created successfully.")
+                return True, success_message, url
         except urllib.error.HTTPError as exc:
             raw = ""
             try:
@@ -1870,8 +1869,8 @@ class WaveformPlayer(QMainWindow):
             return (
                 False,
                 self._txt(
-                    f"GitHub weigerde de aanvraag: {message}",
-                    f"GitHub rejected the request: {message}",
+                    f"Feedback service weigerde de aanvraag: {message}",
+                    f"Feedback service rejected the request: {message}",
                 ),
                 "",
             )
@@ -1879,8 +1878,8 @@ class WaveformPlayer(QMainWindow):
             return (
                 False,
                 self._txt(
-                    f"Kon issue niet posten: {exc}",
-                    f"Could not post issue: {exc}",
+                    f"Kon feedback niet posten: {exc}",
+                    f"Could not post feedback: {exc}",
                 ),
                 "",
             )
@@ -1894,8 +1893,8 @@ class WaveformPlayer(QMainWindow):
         layout = QVBoxLayout(dialog)
         intro = QLabel(
             self._txt(
-                "Maak direct een GitHub issue aan voor bugs of feature requests.",
-                "Create a GitHub issue directly for bugs or feature requests.",
+                "Verstuur bug reports of feature requests via de feedback service.",
+                "Send bug reports or feature requests through the feedback service.",
             )
         )
         intro.setWordWrap(True)
@@ -1939,19 +1938,14 @@ class WaveformPlayer(QMainWindow):
 
         layout.addLayout(form)
 
-        helper = QLabel(
-            self._txt(
-                "Repository: clevrthings/AudioPlayer",
-                "Repository: clevrthings/AudioPlayer",
-            )
-        )
+        helper = QLabel(self._txt("Doel: GitHub Issues", "Target: GitHub Issues"))
         helper.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(helper)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         submit_button = button_box.button(QDialogButtonBox.StandardButton.Ok)
         if submit_button is not None:
-            submit_button.setText(self._txt("Post naar GitHub", "Post to GitHub"))
+            submit_button.setText(self._txt("Versturen", "Submit"))
             submit_button.setDefault(True)
         cancel_button = button_box.button(QDialogButtonBox.StandardButton.Cancel)
         if cancel_button is not None:
@@ -1965,7 +1959,7 @@ class WaveformPlayer(QMainWindow):
             guest_mode = guest_checkbox.isChecked()
             reporter_name = reporter_edit.text().strip()
 
-            ok, message, issue_url = self._post_github_issue(
+            ok, message, issue_url = self._post_feedback_issue(
                 issue_kind,
                 title,
                 details,
@@ -1973,12 +1967,12 @@ class WaveformPlayer(QMainWindow):
                 guest_mode,
             )
             if not ok:
-                QMessageBox.warning(dialog, self._txt("Issue posten mislukt", "Issue post failed"), message)
+                QMessageBox.warning(dialog, self._txt("Feedback verzenden mislukt", "Feedback submit failed"), message)
                 return
 
             if issue_url:
                 message = f"{message}\n{issue_url}"
-            QMessageBox.information(dialog, self._txt("Issue gepost", "Issue posted"), message)
+            QMessageBox.information(dialog, self._txt("Feedback verstuurd", "Feedback sent"), message)
             dialog.accept()
 
         button_box.accepted.connect(submit_feedback)

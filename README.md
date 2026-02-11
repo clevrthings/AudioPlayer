@@ -42,14 +42,24 @@ A modern desktop audio player focused on fast navigation, clear waveform visuali
 ## Feedback from the App
 
 - Users can report bugs or request features directly from Preferences
-- Reports are posted as GitHub Issues to `clevrthings/AudioPlayer`
 - Supports guest submissions (no GitHub account required for end users)
-- Posting uses a central token loaded from `.env`:
-- `AUDIOPLAYER_GITHUB_TOKEN=...`
-- When creating the standalone app, `.env` is bundled automatically if present at build time
 
 ## Audio and Routing
 
 - Output device selection
 - Routing matrix for mapping input channels to output channels
 - Support for layouts up to 7.1.4 (12 channels)
+
+## Screenshots
+
+### Dark theme - multichannel waveform
+![Dark theme multichannel waveform](assets/screenshots/main-dark-multichannel.png)
+
+### Dark theme - stereo track
+![Dark theme stereo track](assets/screenshots/main-dark-stereo.png)
+
+### Light theme
+![Light theme](assets/screenshots/main-light-stereo.png)
+
+### Audio routing preferences
+![Audio routing preferences](assets/screenshots/preferences-audio-routing.png)

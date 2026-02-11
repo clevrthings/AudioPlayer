@@ -1,15 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-from pathlib import Path
-
-datas = [('assets/app_icon.png', 'assets')]
-if Path('.env').is_file():
-    datas.append(('.env', '.'))
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
+    datas=[('assets/app_icon.png', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

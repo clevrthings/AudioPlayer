@@ -20,3 +20,6 @@ dist/
 
 # Local secrets
 .env
+.dev.vars
+worker/.dev.vars
+worker/wrangler.toml
