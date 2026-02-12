@@ -184,7 +184,7 @@ ROUTING_CHANNEL_LABELS = (
     "12",
 )
 
-APP_VERSION = "0.0.1"
+APP_VERSION = "0.0.2"
 FEEDBACK_WORKER_ENV_URL = "AUDIOPLAYER_FEEDBACK_WORKER_URL"
 FEEDBACK_WORKER_ENV_KEY = "AUDIOPLAYER_FEEDBACK_WORKER_KEY"
 FEEDBACK_WORKER_DEFAULT_URL = "https://audioplayer-issue-poster.clevrthings.workers.dev/report"
@@ -509,6 +509,8 @@ class WaveformPlayer(QMainWindow):
         self._autoplay_on_load = False
         self._updating_playhead = False
         self._adjusting_view = False
+        self._play_when_ready = False
+        self._suppress_waveform_render_until = 0.0
         self._settings = QSettings("RicoVanderhallen", "AudioPlayer")
         self._language = "nl"
         self._accent_color = "#7ED298"
@@ -522,6 +524,8 @@ class WaveformPlayer(QMainWindow):
         self._repeat_mode = "off"
         self._default_auto_continue_enabled = True
         self._auto_continue_enabled = True
+        self._default_autoplay_on_add = False
+        self._autoplay_on_add = False
         self._default_follow_playhead = True
         self._follow_playhead = True
         self._playhead_color = ""
@@ -1412,6 +1416,10 @@ class WaveformPlayer(QMainWindow):
             self._settings.value("default_auto_continue", self._default_auto_continue_enabled),
             self._default_auto_continue_enabled,
         )
+        self._default_autoplay_on_add = self._to_bool(
+            self._settings.value("default_autoplay_on_add", self._default_autoplay_on_add),
+            self._default_autoplay_on_add,
+        )
         self._default_follow_playhead = self._to_bool(
             self._settings.value(
                 "default_follow_playhead",
@@ -1456,6 +1464,7 @@ class WaveformPlayer(QMainWindow):
         self._theme_mode = self._default_theme_mode
         self._repeat_mode = self._default_repeat_mode
         self._auto_continue_enabled = self._default_auto_continue_enabled
+        self._autoplay_on_add = self._default_autoplay_on_add
         self._follow_playhead = self._default_follow_playhead
 
     def _save_preferences(self) -> None:
@@ -1464,6 +1473,7 @@ class WaveformPlayer(QMainWindow):
         self._settings.setValue("default_theme", self._default_theme_mode)
         self._settings.setValue("default_repeat", self._default_repeat_mode)
         self._settings.setValue("default_auto_continue", self._default_auto_continue_enabled)
+        self._settings.setValue("default_autoplay_on_add", self._default_autoplay_on_add)
         self._settings.setValue("default_follow_playhead", self._default_follow_playhead)
         self._settings.setValue("playhead_color", self._playhead_color)
         self._settings.setValue("playhead_width", self._playhead_width)
@@ -2345,6 +2355,12 @@ class WaveformPlayer(QMainWindow):
         auto_next_checkbox.setChecked(self._default_auto_continue_enabled)
         defaults_form.addRow("", auto_next_checkbox)
 
+        autoplay_on_add_checkbox = QCheckBox(
+            self._txt("Standaard starten bij toevoegen", "Default start when adding tracks")
+        )
+        autoplay_on_add_checkbox.setChecked(self._default_autoplay_on_add)
+        defaults_form.addRow("", autoplay_on_add_checkbox)
+
         follow_checkbox = QCheckBox(self._txt("Standaard playhead volgen", "Default follow playhead"))
         follow_checkbox.setChecked(self._default_follow_playhead)
         defaults_form.addRow("", follow_checkbox)
@@ -2361,7 +2377,9 @@ class WaveformPlayer(QMainWindow):
             self._default_theme_mode = str(theme_combo.currentData())
             self._default_repeat_mode = str(repeat_combo.currentData())
             self._default_auto_continue_enabled = auto_next_checkbox.isChecked()
+            self._default_autoplay_on_add = autoplay_on_add_checkbox.isChecked()
             self._default_follow_playhead = follow_checkbox.isChecked()
+            self._autoplay_on_add = self._default_autoplay_on_add
             self._audio_output_device_key = str(output_device_combo.currentData() or "").strip().lower()
             self._audio_routing_mode = str(routing_combo.currentData() or "auto")
             self._audio_matrix_enabled = matrix_enabled_checkbox.isChecked()
@@ -3256,6 +3274,7 @@ QPushButton#IconControl:checked {{
         if not new_paths:
             return 0
 
+        was_playing = self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
         first_new_row: int | None = None
         for path in new_paths:
             track = Track(path=path, name=Path(path).name)
@@ -3267,7 +3286,20 @@ QPushButton#IconControl:checked {{
             if first_new_row is None:
                 first_new_row = self.playlist.count() - 1
 
-        if select_first_new and first_new_row is not None:
+        should_activate_first_new = False
+        if first_new_row is not None:
+            if self._autoplay_on_add:
+                should_activate_first_new = True
+            elif was_playing:
+                should_activate_first_new = False
+            elif select_first_new:
+                should_activate_first_new = True
+            elif self.current_index is None and self.tracks:
+                should_activate_first_new = True
+
+        if should_activate_first_new and first_new_row is not None:
+            if self._autoplay_on_add:
+                self._autoplay_on_load = True
             self.playlist.setCurrentRow(first_new_row)
         elif self.current_index is None and self.tracks:
             self.playlist.setCurrentRow(0)
@@ -3404,9 +3436,11 @@ QPushButton#IconControl:checked {{
             self._enqueue_preload([t.path for i, t in enumerate(self.tracks) if i != row])
 
             if self._autoplay_on_load:
-                self.player.play()
+                self._start_playback_smooth(from_track_start=True)
                 self._autoplay_on_load = False
         except Exception as exc:  # noqa: BLE001
+            self._play_when_ready = False
+            self._suppress_waveform_render_until = 0.0
             self._autoplay_on_load = False
             QMessageBox.critical(
                 self,
@@ -3535,6 +3569,11 @@ QPushButton#IconControl:checked {{
         self.wave_partial[path] = (self._active_wave_signature, x, amp, filled_bins, total_bins)
 
         if self._current_track_path() == path:
+            if (
+                self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                and time.monotonic() < self._suppress_waveform_render_until
+            ):
+                return
             self._render_partial_for_path(path, self._active_wave_signature)
 
     @Slot(int, str, object, object)
@@ -3688,6 +3727,11 @@ QPushButton#IconControl:checked {{
         self.wave_partial[path] = (self._preload_signature, x, amp, filled_bins, total_bins)
 
         if self._current_track_path() == path:
+            if (
+                self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+                and time.monotonic() < self._suppress_waveform_render_until
+            ):
+                return
             self._render_partial_for_path(path, self._preload_signature)
 
     @Slot(int, str, object, object)
@@ -3727,17 +3771,36 @@ QPushButton#IconControl:checked {{
     def _on_audio_outputs_changed(self) -> None:
         self._apply_audio_preferences(update_status=False)
 
+    def _start_playback_smooth(self, from_track_start: bool = False) -> None:
+        # Avoid heavy waveform redraw bursts right at the first playback moments.
+        if from_track_start or self.player.position() <= 250:
+            self._suppress_waveform_render_until = time.monotonic() + 0.8
+        else:
+            self._suppress_waveform_render_until = 0.0
+
+        if self.player.mediaStatus() == QMediaPlayer.MediaStatus.LoadingMedia:
+            self._play_when_ready = True
+            return
+
+        self._play_when_ready = False
+        self.player.play()
+
     def toggle_play(self) -> None:
         if self.current_index is None and self.tracks:
             self._autoplay_on_load = True
             self.playlist.setCurrentRow(0)
             return
 
+        if self._play_when_ready:
+            self._play_when_ready = False
+            return
+
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._play_when_ready = False
             self.player.pause()
             return
 
-        self.player.play()
+        self._start_playback_smooth(from_track_start=self.player.position() <= 250)
 
     def on_playback_state(self, state: QMediaPlayer.PlaybackState) -> None:
         if state == QMediaPlayer.PlaybackState.PlayingState:
@@ -3748,6 +3811,19 @@ QPushButton#IconControl:checked {{
             self.play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
 
     def on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if self._play_when_ready and status in {
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+            QMediaPlayer.MediaStatus.BufferingMedia,
+        }:
+            self._play_when_ready = False
+            self.player.play()
+            return
+
+        if status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self._play_when_ready = False
+            return
+
         if status != QMediaPlayer.MediaStatus.EndOfMedia:
             return
         self._handle_track_end()
@@ -3798,6 +3874,8 @@ QPushButton#IconControl:checked {{
                 self._set_view(max(0.0, pos_s - self.current_window_s * 0.2), self.current_window_s)
 
     def stop(self) -> None:
+        self._play_when_ready = False
+        self._suppress_waveform_render_until = 0.0
         self.player.stop()
         self.player.setPosition(0)
         self._last_ui_ms = 0
