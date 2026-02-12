@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import pyqtgraph as pg
@@ -56,6 +57,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QStyle,
     QTabWidget,
@@ -65,6 +67,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+try:
+    import mido  # type: ignore[import-not-found]
+except Exception:  # noqa: BLE001
+    mido = None
 
 
 def _parse_dotenv_value(raw_value: str) -> str:
@@ -188,6 +195,17 @@ APP_VERSION = "0.0.2"
 FEEDBACK_WORKER_ENV_URL = "AUDIOPLAYER_FEEDBACK_WORKER_URL"
 FEEDBACK_WORKER_ENV_KEY = "AUDIOPLAYER_FEEDBACK_WORKER_KEY"
 FEEDBACK_WORKER_DEFAULT_URL = "https://audioplayer-issue-poster.clevrthings.workers.dev/report"
+
+MIDI_ACTION_IDS = (
+    "previous_track",
+    "toggle_play",
+    "play",
+    "pause",
+    "next_track",
+    "stop",
+    "repeat_mode",
+    "auto_next_toggle",
+)
 
 
 class WaveformJob(QThread):
@@ -488,6 +506,8 @@ class PlaylistWidget(QListWidget):
 
 
 class WaveformPlayer(QMainWindow):
+    midiNoteReceived = Signal(int)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Audio Player")
@@ -539,6 +559,13 @@ class WaveformPlayer(QMainWindow):
         self._effective_audio_route_note = ""
         self._audio_matrix_enabled = False
         self._audio_routing_matrix = self._default_routing_matrix()
+        self._midi_enabled = False
+        self._midi_input_name = ""
+        self._midi_channel = -1
+        self._midi_note_map = {action_id: -1 for action_id in MIDI_ACTION_IDS}
+        self._midi_input_port = None
+        self._midi_capture_callback: Callable[[int], bool] | None = None
+        self._midi_last_note_at: dict[int, float] = {}
         self._feedback_worker_url = os.getenv(FEEDBACK_WORKER_ENV_URL, "").strip() or FEEDBACK_WORKER_DEFAULT_URL
         self._feedback_worker_key = os.getenv(FEEDBACK_WORKER_ENV_KEY, "").strip()
         self._wave_top_color = QColor("#72cfff")
@@ -576,6 +603,7 @@ class WaveformPlayer(QMainWindow):
         self._connect_signals()
         self._apply_language()
         self.set_theme_mode(self._theme_mode)
+        self._refresh_midi_input(update_status=False)
 
         self._system_theme_timer = QTimer(self)
         self._system_theme_timer.setInterval(1200)
@@ -884,7 +912,11 @@ class WaveformPlayer(QMainWindow):
         self.keypad_enter_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Enter), self)
         self.keypad_enter_shortcut.activated.connect(self.stop)
 
+        # MIDI callbacks can arrive on a non-Qt thread; dispatch safely to UI thread.
+        self.midiNoteReceived.connect(self._handle_midi_note_input)
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._close_midi_input()
         self._stop_active_wave_worker(wait_ms=1500)
         self._stop_preload_worker(requeue=False, wait_ms=1500)
         self._cleanup_session_routed_files()
@@ -950,6 +982,199 @@ class WaveformPlayer(QMainWindow):
             for col_idx in range(min(size, len(row_text))):
                 matrix[row_idx][col_idx] = 1 if row_text[col_idx] == "1" else 0
         return matrix
+
+    @staticmethod
+    def _default_midi_note_map() -> dict[str, int]:
+        return {
+            "previous_track": 1,
+            "toggle_play": 6,
+            "play": -1,
+            "pause": 3,
+            "next_track": 2,
+            "stop": 4,
+            "repeat_mode": -1,
+            "auto_next_toggle": -1,
+        }
+
+    @staticmethod
+    def _normalize_midi_note_map(raw_map) -> dict[str, int]:
+        normalized = WaveformPlayer._default_midi_note_map()
+        if not isinstance(raw_map, dict):
+            return normalized
+        for action_id in MIDI_ACTION_IDS:
+            raw_value = raw_map.get(action_id, -1)
+            try:
+                note_value = int(raw_value)
+            except Exception:  # noqa: BLE001
+                note_value = -1
+            normalized[action_id] = note_value if 0 <= note_value <= 127 else -1
+        return normalized
+
+    @staticmethod
+    def _midi_note_label(note: int) -> str:
+        value = int(note)
+        if value < 0 or value > 127:
+            return "-"
+        names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+        octave = (value // 12) - 1
+        return f"{names[value % 12]}{octave} ({value})"
+
+    def _midi_action_label(self, action_id: str) -> str:
+        labels = {
+            "previous_track": self._txt("Vorige track", "Previous track"),
+            "toggle_play": self._txt("Play / Pauze", "Play / Pause"),
+            "play": self._txt("Play", "Play"),
+            "pause": self._txt("Pauze", "Pause"),
+            "next_track": self._txt("Volgende track", "Next track"),
+            "stop": self._txt("Stop", "Stop"),
+            "repeat_mode": self._txt("Repeat modus", "Repeat mode"),
+            "auto_next_toggle": self._txt("Auto next toggle", "Auto next toggle"),
+        }
+        return labels.get(action_id, action_id)
+
+    def _midi_channel_label(self, channel_value: int) -> str:
+        if int(channel_value) < 0:
+            return self._txt("Alle kanalen", "All channels")
+        return self._txt(f"Kanaal {int(channel_value) + 1}", f"Channel {int(channel_value) + 1}")
+
+    @staticmethod
+    def _midi_input_names() -> list[str]:
+        if mido is None:
+            return []
+        try:
+            names = list(mido.get_input_names())
+        except Exception:  # noqa: BLE001
+            return []
+        cleaned = [str(name).strip() for name in names if str(name).strip()]
+        return cleaned
+
+    def _close_midi_input(self) -> None:
+        if self._midi_input_port is None:
+            return
+        try:
+            self._midi_input_port.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._midi_input_port = None
+
+    def _refresh_midi_input(self, update_status: bool = False) -> None:
+        if mido is None:
+            self._close_midi_input()
+            return
+
+        if not self._midi_enabled:
+            self._close_midi_input()
+            return
+
+        input_names = self._midi_input_names()
+        if not input_names:
+            self._close_midi_input()
+            if update_status and hasattr(self, "status"):
+                self.status.setText(self._txt("Geen MIDI input gevonden", "No MIDI input found"))
+            return
+
+        target_name = self._midi_input_name if self._midi_input_name in input_names else input_names[0]
+        if not self._midi_input_name or self._midi_input_name not in input_names:
+            self._midi_input_name = target_name
+
+        current_name = ""
+        if self._midi_input_port is not None:
+            current_name = str(getattr(self._midi_input_port, "name", "") or "")
+        if self._midi_input_port is not None and current_name == target_name:
+            return
+
+        self._close_midi_input()
+        try:
+            self._midi_input_port = mido.open_input(target_name, callback=self._on_midi_message)
+            if update_status and hasattr(self, "status"):
+                self.status.setText(self._txt(f"MIDI actief: {target_name}", f"MIDI active: {target_name}"))
+        except Exception as exc:  # noqa: BLE001
+            self._midi_input_port = None
+            if update_status and hasattr(self, "status"):
+                self.status.setText(self._txt(f"MIDI fout: {exc}", f"MIDI error: {exc}"))
+
+    def _on_midi_message(self, message) -> None:
+        try:
+            msg_type = str(getattr(message, "type", ""))
+        except Exception:  # noqa: BLE001
+            msg_type = ""
+        if msg_type != "note_on":
+            return
+        try:
+            velocity = int(getattr(message, "velocity", 0))
+            note = int(getattr(message, "note", -1))
+            msg_channel = int(getattr(message, "channel", -1))
+        except Exception:  # noqa: BLE001
+            return
+        if velocity <= 0 or note < 0 or note > 127:
+            return
+        if self._midi_channel >= 0 and msg_channel != self._midi_channel:
+            return
+        try:
+            self.midiNoteReceived.emit(note)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _handle_midi_note_input(self, note: int) -> None:
+        note_value = int(note)
+        if note_value < 0 or note_value > 127:
+            return
+
+        now = time.monotonic()
+        last_at = self._midi_last_note_at.get(note_value, 0.0)
+        if now - last_at < 0.09:
+            return
+        self._midi_last_note_at[note_value] = now
+
+        if self._midi_capture_callback is not None:
+            try:
+                consumed = bool(self._midi_capture_callback(note_value))
+            except Exception:  # noqa: BLE001
+                consumed = False
+            if consumed:
+                return
+
+        if not self._midi_enabled:
+            return
+
+        for action_id in MIDI_ACTION_IDS:
+            if int(self._midi_note_map.get(action_id, -1)) != note_value:
+                continue
+            self._trigger_midi_action(action_id)
+            return
+
+    def _trigger_midi_action(self, action_id: str) -> None:
+        if action_id == "previous_track":
+            self.previous_track()
+            return
+        if action_id == "toggle_play":
+            self.toggle_play()
+            return
+        if action_id == "play":
+            if self.current_index is None and self.tracks:
+                self._autoplay_on_load = True
+                self.playlist.setCurrentRow(0)
+                return
+            if self.player.playbackState() != QMediaPlayer.PlaybackState.PlayingState:
+                self._start_playback_smooth(from_track_start=self.player.position() <= 250)
+            return
+        if action_id == "pause":
+            self._play_when_ready = False
+            if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+                self.player.pause()
+            return
+        if action_id == "next_track":
+            self.next_track()
+            return
+        if action_id == "stop":
+            self.stop()
+            return
+        if action_id == "repeat_mode":
+            self._cycle_repeat_mode()
+            return
+        if action_id == "auto_next_toggle":
+            self._set_auto_continue_enabled(not self._auto_continue_enabled, save=False)
+            return
 
     @staticmethod
     def _routing_matrix_target_channels(matrix: list[list[int]]) -> int:
@@ -1460,6 +1685,25 @@ class WaveformPlayer(QMainWindow):
         )
         matrix_raw = str(self._settings.value("audio_routing_matrix", ""))
         self._audio_routing_matrix = self._parse_routing_matrix(matrix_raw)
+        self._midi_enabled = self._to_bool(
+            self._settings.value("midi_enabled", self._midi_enabled),
+            self._midi_enabled,
+        )
+        self._midi_input_name = str(self._settings.value("midi_input_name", self._midi_input_name)).strip()
+        try:
+            midi_channel_value = int(self._settings.value("midi_channel", self._midi_channel))
+        except Exception:  # noqa: BLE001
+            midi_channel_value = -1
+        self._midi_channel = midi_channel_value if -1 <= midi_channel_value <= 15 else -1
+        midi_map_raw = str(self._settings.value("midi_note_map", ""))
+        midi_map_value: dict[str, int] = self._default_midi_note_map()
+        if midi_map_raw:
+            try:
+                parsed_map = json.loads(midi_map_raw)
+            except Exception:  # noqa: BLE001
+                parsed_map = {}
+            midi_map_value = self._normalize_midi_note_map(parsed_map)
+        self._midi_note_map = midi_map_value
 
         self._theme_mode = self._default_theme_mode
         self._repeat_mode = self._default_repeat_mode
@@ -1483,6 +1727,10 @@ class WaveformPlayer(QMainWindow):
         self._settings.setValue("audio_routing_mode", self._audio_routing_mode)
         self._settings.setValue("audio_matrix_enabled", self._audio_matrix_enabled)
         self._settings.setValue("audio_routing_matrix", self._serialize_routing_matrix(self._audio_routing_matrix))
+        self._settings.setValue("midi_enabled", self._midi_enabled)
+        self._settings.setValue("midi_input_name", self._midi_input_name)
+        self._settings.setValue("midi_channel", self._midi_channel)
+        self._settings.setValue("midi_note_map", json.dumps(self._normalize_midi_note_map(self._midi_note_map), sort_keys=True))
 
     def _txt(self, nl_text: str, en_text: str) -> str:
         return en_text if self._language == "en" else nl_text
@@ -1993,13 +2241,18 @@ class WaveformPlayer(QMainWindow):
     def open_settings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle(self._txt("Voorkeuren", "Preferences"))
-        dialog.setMinimumWidth(980)
+        dialog.setMinimumWidth(1120)
         dialog.setMinimumHeight(700)
-        dialog.resize(1060, 760)
+        dialog.resize(1200, 760)
 
         layout = QVBoxLayout(dialog)
         tabs = QTabWidget()
         layout.addWidget(tabs)
+        midi_applied_state: dict[str, object] = {
+            "enabled": self._midi_enabled,
+            "input_name": self._midi_input_name,
+            "channel": self._midi_channel,
+        }
 
         general_tab = QWidget()
         general_form = QFormLayout(general_tab)
@@ -2007,9 +2260,15 @@ class WaveformPlayer(QMainWindow):
         defaults_form = QFormLayout(defaults_tab)
         audio_tab = QWidget()
         audio_form = QFormLayout(audio_tab)
+        midi_tab = QWidget()
+        midi_form = QFormLayout(midi_tab)
+        midi_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        midi_form.setLabelAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        midi_form.setHorizontalSpacing(10)
         tabs.addTab(general_tab, self._txt("Algemeen", "General"))
         tabs.addTab(defaults_tab, self._txt("Defaults", "Defaults"))
         tabs.addTab(audio_tab, self._txt("Audio", "Audio"))
+        tabs.addTab(midi_tab, self._txt("MIDI", "MIDI"))
 
         defaults_note = QLabel(self._txt("Deze instellingen gelden als opstart-standaard.", "These settings are startup defaults."))
         defaults_note.setWordWrap(True)
@@ -2337,6 +2596,267 @@ class WaveformPlayer(QMainWindow):
         set_matrix_ui_enabled(matrix_enabled_checkbox.isChecked())
         refresh_audio_preview()
 
+        midi_enabled_checkbox = QCheckBox(self._txt("MIDI input activeren", "Enable MIDI input"))
+        midi_enabled_checkbox.setChecked(self._midi_enabled)
+        midi_form.addRow("", midi_enabled_checkbox)
+
+        midi_device_combo = QComboBox()
+        midi_refresh_button = QPushButton(self._txt("Vernieuwen", "Refresh"))
+        midi_device_row = QWidget()
+        midi_device_row_layout = QHBoxLayout(midi_device_row)
+        midi_device_row_layout.setContentsMargins(0, 0, 0, 0)
+        midi_device_row_layout.setSpacing(6)
+        midi_device_row_layout.addWidget(midi_device_combo, 1)
+        midi_device_row_layout.addWidget(midi_refresh_button)
+        midi_form.addRow(self._txt("MIDI input", "MIDI input"), midi_device_row)
+
+        midi_channel_combo = QComboBox()
+        midi_channel_combo.addItem(self._txt("Alle kanalen", "All channels"), -1)
+        for channel_index in range(16):
+            midi_channel_combo.addItem(
+                self._txt(f"Kanaal {channel_index + 1}", f"Channel {channel_index + 1}"),
+                channel_index,
+            )
+        channel_index = 0
+        for idx in range(midi_channel_combo.count()):
+            if int(midi_channel_combo.itemData(idx)) == self._midi_channel:
+                channel_index = idx
+                break
+        midi_channel_combo.setCurrentIndex(channel_index)
+        midi_form.addRow(self._txt("MIDI kanaal", "MIDI channel"), midi_channel_combo)
+
+        midi_status_label = QLabel("")
+        midi_status_label.setWordWrap(True)
+        midi_status_label.setMinimumWidth(560)
+        midi_status_label.setMinimumHeight(36)
+        midi_status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        midi_form.addRow(self._txt("Status", "Status"), midi_status_label)
+
+        midi_capture_label = QLabel("")
+        midi_capture_label.setWordWrap(True)
+        midi_capture_label.setMinimumWidth(560)
+        midi_capture_label.setMinimumHeight(36)
+        midi_capture_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        midi_form.addRow(self._txt("Learn", "Learn"), midi_capture_label)
+
+        midi_mapping_container = QWidget()
+        midi_mapping_layout = QGridLayout(midi_mapping_container)
+        midi_mapping_layout.setContentsMargins(0, 0, 0, 0)
+        midi_mapping_layout.setHorizontalSpacing(6)
+        midi_mapping_layout.setVerticalSpacing(6)
+        midi_mapping_layout.addWidget(QLabel(self._txt("Control", "Control")), 0, 0)
+        midi_mapping_layout.addWidget(QLabel(self._txt("MIDI noot", "MIDI note")), 0, 1)
+        midi_mapping_layout.addWidget(QLabel(self._txt("Label", "Label")), 0, 2)
+        midi_mapping_layout.addWidget(QLabel(self._txt("Learn", "Learn")), 0, 3)
+        midi_mapping_layout.addWidget(QLabel(self._txt("Clear", "Clear")), 0, 4)
+
+        midi_note_map_working = self._normalize_midi_note_map(self._midi_note_map)
+        midi_note_spinners: dict[str, QSpinBox] = {}
+        midi_note_labels: dict[str, QLabel] = {}
+        midi_learn_buttons: dict[str, QPushButton] = {}
+        pending_learn_action: dict[str, str] = {"id": ""}
+
+        def refresh_midi_mapping_row(action_id: str) -> None:
+            note_value = int(midi_note_map_working.get(action_id, -1))
+            if action_id in midi_note_spinners:
+                spinner = midi_note_spinners[action_id]
+                spinner.blockSignals(True)
+                spinner.setValue(note_value)
+                spinner.blockSignals(False)
+            if action_id in midi_note_labels:
+                midi_note_labels[action_id].setText(self._midi_note_label(note_value))
+            if action_id in midi_learn_buttons:
+                midi_learn_buttons[action_id].setText(
+                    self._txt("Wachten...", "Listening...")
+                    if pending_learn_action["id"] == action_id
+                    else self._txt("Learn", "Learn")
+                )
+
+        def refresh_midi_mapping_rows() -> None:
+            for action_id in MIDI_ACTION_IDS:
+                refresh_midi_mapping_row(action_id)
+
+        def on_midi_note_changed(action_id: str, value: int) -> None:
+            midi_note_map_working[action_id] = int(value) if 0 <= int(value) <= 127 else -1
+            if pending_learn_action["id"] == action_id:
+                pending_learn_action["id"] = ""
+            refresh_midi_mapping_row(action_id)
+
+        def on_start_midi_learn(action_id: str) -> None:
+            pending_learn_action["id"] = action_id
+            midi_capture_label.setText(
+                self._txt(
+                    f"Learn actief voor '{self._midi_action_label(action_id)}'. Speel nu een MIDI noot.",
+                    f"Learn active for '{self._midi_action_label(action_id)}'. Play a MIDI note now.",
+                )
+            )
+            refresh_midi_mapping_rows()
+
+        def on_clear_midi_mapping(action_id: str) -> None:
+            if pending_learn_action["id"] == action_id:
+                pending_learn_action["id"] = ""
+            midi_note_map_working[action_id] = -1
+            refresh_midi_mapping_row(action_id)
+            midi_capture_label.setText(self._txt("Mapping gewist.", "Mapping cleared."))
+
+        def on_reset_midi_defaults() -> None:
+            pending_learn_action["id"] = ""
+            defaults = self._default_midi_note_map()
+            for action_id in MIDI_ACTION_IDS:
+                midi_note_map_working[action_id] = int(defaults.get(action_id, -1))
+            refresh_midi_mapping_rows()
+            midi_capture_label.setText(
+                self._txt(
+                    "MIDI mapping hersteld naar standaard.",
+                    "MIDI mapping reset to defaults.",
+                )
+            )
+
+        for row_offset, action_id in enumerate(MIDI_ACTION_IDS, start=1):
+            action_label = QLabel(self._midi_action_label(action_id))
+            spinner = QSpinBox()
+            spinner.setRange(-1, 127)
+            spinner.setSpecialValueText(self._txt("Geen", "None"))
+            spinner.setValue(int(midi_note_map_working.get(action_id, -1)))
+            note_label = QLabel(self._midi_note_label(int(midi_note_map_working.get(action_id, -1))))
+            learn_button = QPushButton(self._txt("Learn", "Learn"))
+            clear_button = QPushButton(self._txt("Clear", "Clear"))
+
+            spinner.valueChanged.connect(lambda value, action=action_id: on_midi_note_changed(action, value))
+            learn_button.clicked.connect(lambda _checked=False, action=action_id: on_start_midi_learn(action))
+            clear_button.clicked.connect(lambda _checked=False, action=action_id: on_clear_midi_mapping(action))
+
+            midi_note_spinners[action_id] = spinner
+            midi_note_labels[action_id] = note_label
+            midi_learn_buttons[action_id] = learn_button
+
+            midi_mapping_layout.addWidget(action_label, row_offset, 0)
+            midi_mapping_layout.addWidget(spinner, row_offset, 1)
+            midi_mapping_layout.addWidget(note_label, row_offset, 2)
+            midi_mapping_layout.addWidget(learn_button, row_offset, 3)
+            midi_mapping_layout.addWidget(clear_button, row_offset, 4)
+
+        midi_mapping_scroll = QScrollArea()
+        midi_mapping_scroll.setWidgetResizable(True)
+        midi_mapping_scroll.setMinimumWidth(620)
+        midi_mapping_scroll.setMinimumHeight(280)
+        midi_mapping_scroll.setWidget(midi_mapping_container)
+        midi_form.addRow(self._txt("Mapping", "Mapping"), midi_mapping_scroll)
+
+        midi_reset_defaults_button = QPushButton(self._txt("Herstel MIDI defaults", "Reset MIDI defaults"))
+        midi_reset_defaults_button.clicked.connect(on_reset_midi_defaults)
+        midi_form.addRow("", midi_reset_defaults_button)
+
+        def refresh_midi_devices() -> None:
+            midi_device_combo.blockSignals(True)
+            midi_device_combo.clear()
+            if mido is None:
+                midi_device_combo.addItem(self._txt("MIDI library ontbreekt", "MIDI library missing"), "")
+            else:
+                names = self._midi_input_names()
+                if names:
+                    for name in names:
+                        midi_device_combo.addItem(name, name)
+                else:
+                    midi_device_combo.addItem(self._txt("Geen MIDI input gevonden", "No MIDI input found"), "")
+
+            selected_name = self._midi_input_name
+            if selected_name:
+                for idx in range(midi_device_combo.count()):
+                    if str(midi_device_combo.itemData(idx) or "") == selected_name:
+                        midi_device_combo.setCurrentIndex(idx)
+                        break
+            midi_device_combo.blockSignals(False)
+
+        def refresh_midi_status() -> None:
+            if mido is None:
+                midi_status_label.setText(
+                    self._txt(
+                        "MIDI niet beschikbaar. Installeer 'mido' en 'python-rtmidi'.",
+                        "MIDI not available. Install 'mido' and 'python-rtmidi'.",
+                    )
+                )
+                return
+            if not midi_enabled_checkbox.isChecked():
+                midi_status_label.setText(self._txt("MIDI staat uit.", "MIDI is disabled."))
+                return
+            selected_name = str(midi_device_combo.currentData() or "").strip()
+            if not selected_name:
+                midi_status_label.setText(self._txt("Geen MIDI input geselecteerd.", "No MIDI input selected."))
+                return
+            selected_channel_data = midi_channel_combo.currentData()
+            selected_channel = int(selected_channel_data) if selected_channel_data is not None else -1
+            midi_status_label.setText(
+                self._txt(
+                    f"Geselecteerde input: {selected_name}\nLuistert op: {self._midi_channel_label(selected_channel)}",
+                    f"Selected input: {selected_name}\nListening on: {self._midi_channel_label(selected_channel)}",
+                )
+            )
+
+        def apply_midi_preview_from_controls() -> None:
+            if mido is None:
+                return
+            self._midi_enabled = bool(midi_enabled_checkbox.isChecked())
+            self._midi_input_name = str(midi_device_combo.currentData() or "").strip()
+            selected_channel_data = midi_channel_combo.currentData()
+            self._midi_channel = int(selected_channel_data) if selected_channel_data is not None else -1
+            self._refresh_midi_input(update_status=False)
+
+        def midi_capture_handler(note: int) -> bool:
+            note_value = int(note)
+            midi_capture_label.setText(
+                self._txt(
+                    f"MIDI noot ontvangen: {self._midi_note_label(note_value)}",
+                    f"MIDI note received: {self._midi_note_label(note_value)}",
+                )
+            )
+            action_id = pending_learn_action["id"]
+            if action_id:
+                midi_note_map_working[action_id] = note_value
+                pending_learn_action["id"] = ""
+                refresh_midi_mapping_rows()
+            # Always consume while preferences are open, so mapped controls do not trigger accidentally.
+            return True
+
+        def on_midi_dialog_finished(_result: int) -> None:
+            if self._midi_capture_callback is midi_capture_handler:
+                self._midi_capture_callback = None
+            if _result != int(QDialog.DialogCode.Accepted):
+                self._midi_enabled = bool(midi_applied_state.get("enabled", False))
+                self._midi_input_name = str(midi_applied_state.get("input_name", "") or "")
+                self._midi_channel = int(midi_applied_state.get("channel", -1))
+                self._refresh_midi_input(update_status=False)
+
+        self._midi_capture_callback = midi_capture_handler
+        dialog.finished.connect(on_midi_dialog_finished)
+
+        refresh_midi_devices()
+        refresh_midi_mapping_rows()
+        refresh_midi_status()
+        midi_capture_label.setText(
+            self._txt(
+                "Klik op Learn en speel een MIDI noot om te mappen.",
+                "Click Learn and play a MIDI note to map it.",
+            )
+        )
+        midi_refresh_button.clicked.connect(refresh_midi_devices)
+        midi_refresh_button.clicked.connect(refresh_midi_status)
+        midi_refresh_button.clicked.connect(apply_midi_preview_from_controls)
+        midi_device_combo.currentIndexChanged.connect(refresh_midi_status)
+        midi_device_combo.currentIndexChanged.connect(apply_midi_preview_from_controls)
+        midi_channel_combo.currentIndexChanged.connect(refresh_midi_status)
+        midi_channel_combo.currentIndexChanged.connect(apply_midi_preview_from_controls)
+        midi_enabled_checkbox.toggled.connect(refresh_midi_status)
+        midi_enabled_checkbox.toggled.connect(apply_midi_preview_from_controls)
+        apply_midi_preview_from_controls()
+        if mido is None:
+            midi_enabled_checkbox.setEnabled(False)
+            midi_device_combo.setEnabled(False)
+            midi_channel_combo.setEnabled(False)
+            midi_refresh_button.setEnabled(False)
+            midi_mapping_scroll.setEnabled(False)
+            midi_reset_defaults_button.setEnabled(False)
+
         theme_combo = QComboBox()
         theme_combo.addItem(self._txt("Systeem", "System"), "system")
         theme_combo.addItem(self._txt("Donker", "Dark"), "dark")
@@ -2384,9 +2904,18 @@ class WaveformPlayer(QMainWindow):
             self._audio_routing_mode = str(routing_combo.currentData() or "auto")
             self._audio_matrix_enabled = matrix_enabled_checkbox.isChecked()
             self._audio_routing_matrix = self._clone_routing_matrix(matrix_values_from_ui())
+            self._midi_enabled = bool(midi_enabled_checkbox.isChecked()) and mido is not None
+            self._midi_input_name = str(midi_device_combo.currentData() or "").strip()
+            selected_channel_data = midi_channel_combo.currentData()
+            self._midi_channel = int(selected_channel_data) if selected_channel_data is not None else -1
+            self._midi_note_map = self._normalize_midi_note_map(midi_note_map_working)
             self._set_waveform_resolution(int(resolution_combo.currentData()), save=False)
             self._set_waveform_view_mode(str(waveform_view_combo.currentData()), save=False)
             self._apply_audio_preferences(update_status=False)
+            self._refresh_midi_input(update_status=False)
+            midi_applied_state["enabled"] = self._midi_enabled
+            midi_applied_state["input_name"] = self._midi_input_name
+            midi_applied_state["channel"] = self._midi_channel
             self._save_preferences()
             self._apply_language()
             self._apply_effective_theme()
