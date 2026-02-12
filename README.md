@@ -53,6 +53,33 @@ Note: playback support for some compressed formats can depend on the OS multimed
 - Previous, play/pause, next, and stop controls
 - Repeat modes: off, one, all
 
+## MIDI control
+
+- Enable MIDI input from the Preferences window
+- Select a MIDI input device
+- Listen on **All channels** or a specific MIDI channel (**1-16**)
+- Per-control MIDI mapping with manual note entry or **Learn**
+- One-click reset to default MIDI mappings
+
+Mapped controls:
+
+- Previous track
+- Play/Pause (toggle)
+- Play
+- Pause
+- Next track
+- Stop
+- Repeat mode
+- Auto next toggle
+
+Default MIDI note mapping:
+
+- Previous track: `1`
+- Play/Pause: `6`
+- Pause: `3`
+- Next track: `2`
+- Stop: `4`
+
 ## Screenshots
 
 ### Multichannel waveform (dark theme)
