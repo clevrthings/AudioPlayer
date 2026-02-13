@@ -16,10 +16,22 @@ pip install -r requirements.txt
 python app.py
 
 # Build standalone macOS app (outputs to dist/)
-pyinstaller AudioPlayer.spec
+.venv/bin/pyinstaller AudioPlayer.spec
+
+# Build DMG for distribution (includes /Applications symlink for drag-to-install)
+hdiutil create -volname "AudioPlayer" -fs HFS+ -srcfolder dist/AudioPlayer.app \
+  -ov -format UDZO dist/AudioPlayer-<version>-mac.dmg
+# Then add Applications symlink inside the DMG:
+hdiutil attach dist/AudioPlayer-<version>-mac.dmg -readwrite -noverify
+ln -s /Applications /Volumes/AudioPlayer/Applications
+hdiutil detach /Volumes/AudioPlayer
+hdiutil convert dist/AudioPlayer-<version>-mac.dmg -format UDZO \
+  -o dist/AudioPlayer-<version>-mac.dmg -ov
 ```
 
 There is no test suite, linter configuration, or CI pipeline.
+
+GitHub releases are managed via `gh` CLI (repo: clevrthings/AudioPlayer).
 
 ## Architecture
 
