@@ -18,6 +18,9 @@ dist/
 .vscode/
 .idea/
 
+# Claude Code
+CLAUDE.md
+
 # Local secrets
 .env
 .dev.vars
