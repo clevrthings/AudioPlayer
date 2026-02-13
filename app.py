@@ -22,6 +22,7 @@ from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
+    QDesktopServices,
     QDragEnterEvent,
     QDragMoveEvent,
     QDropEvent,
@@ -191,7 +192,9 @@ ROUTING_CHANNEL_LABELS = (
     "12",
 )
 
-APP_VERSION = "0.0.2"
+APP_VERSION = "0.1.0"
+RELEASE_LATEST_API_URL = "https://api.github.com/repos/clevrthings/AudioPlayer/releases/latest"
+RELEASES_LATEST_PAGE_URL = "https://github.com/clevrthings/AudioPlayer/releases/latest"
 FEEDBACK_WORKER_ENV_URL = "AUDIOPLAYER_FEEDBACK_WORKER_URL"
 FEEDBACK_WORKER_ENV_KEY = "AUDIOPLAYER_FEEDBACK_WORKER_KEY"
 FEEDBACK_WORKER_DEFAULT_URL = "https://audioplayer-issue-poster.clevrthings.workers.dev/report"
@@ -2256,32 +2259,50 @@ class WaveformPlayer(QMainWindow):
 
         general_tab = QWidget()
         general_form = QFormLayout(general_tab)
-        defaults_tab = QWidget()
-        defaults_form = QFormLayout(defaults_tab)
         audio_tab = QWidget()
         audio_form = QFormLayout(audio_tab)
         midi_tab = QWidget()
         midi_form = QFormLayout(midi_tab)
-        midi_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        midi_form.setLabelAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
-        midi_form.setHorizontalSpacing(10)
+
+        def _configure_settings_form(form: QFormLayout, *, top_labels: bool = False) -> None:
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
+            form.setFormAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+            form.setLabelAlignment(
+                (Qt.AlignmentFlag.AlignTop if top_labels else Qt.AlignmentFlag.AlignVCenter)
+                | Qt.AlignmentFlag.AlignRight
+            )
+            form.setHorizontalSpacing(16)
+            form.setVerticalSpacing(12)
+            form.setContentsMargins(24, 20, 24, 20)
+
+        _configure_settings_form(general_form)
+        _configure_settings_form(audio_form)
+        _configure_settings_form(midi_form, top_labels=True)
+
+        def _set_expanding_field(widget: QWidget, min_width: int = 520) -> None:
+            widget.setSizePolicy(QSizePolicy.Policy.Expanding, widget.sizePolicy().verticalPolicy())
+            widget.setMinimumWidth(min_width)
+
+        def _set_compact_field(widget: QWidget, width: int = 460) -> None:
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, widget.sizePolicy().verticalPolicy())
+            widget.setMinimumWidth(max(260, width - 120))
+            widget.setMaximumWidth(width)
+
         tabs.addTab(general_tab, self._txt("Algemeen", "General"))
-        tabs.addTab(defaults_tab, self._txt("Defaults", "Defaults"))
         tabs.addTab(audio_tab, self._txt("Audio", "Audio"))
         tabs.addTab(midi_tab, self._txt("MIDI", "MIDI"))
-
-        defaults_note = QLabel(self._txt("Deze instellingen gelden als opstart-standaard.", "These settings are startup defaults."))
-        defaults_note.setWordWrap(True)
-        defaults_form.addRow(defaults_note)
 
         language_combo = QComboBox()
         language_combo.addItem("Nederlands", "nl")
         language_combo.addItem("English", "en")
         language_combo.setCurrentIndex(0 if self._language == "nl" else 1)
+        _set_compact_field(language_combo, 460)
         general_form.addRow(self._txt("Taal", "Language"), language_combo)
 
         accent_button = QPushButton(self._accent_color.upper())
         accent_button.setToolTip(self._txt("Kies accent kleur", "Choose accent color"))
+        _set_compact_field(accent_button, 460)
         accent_color = QColor(self._accent_color)
 
         def choose_accent_color() -> None:
@@ -2310,12 +2331,14 @@ class WaveformPlayer(QMainWindow):
             if points == self._waveform_points:
                 selected_resolution_index = idx
         resolution_combo.setCurrentIndex(selected_resolution_index)
+        _set_compact_field(resolution_combo, 460)
         general_form.addRow(self._txt("Waveform resolutie", "Waveform resolution"), resolution_combo)
 
         waveform_view_combo = QComboBox()
         waveform_view_combo.addItem(self._txt("Standaard (gecombineerd)", "Default (combined)"), "combined")
         waveform_view_combo.addItem(self._txt("Per kanaal (gescheiden)", "Per channel (separate)"), "channels")
         waveform_view_combo.setCurrentIndex(0 if self._waveform_view_mode == "combined" else 1)
+        _set_compact_field(waveform_view_combo, 460)
         general_form.addRow(self._txt("Waveform weergave", "Waveform view"), waveform_view_combo)
 
         playhead_color = self._playhead_color if QColor(self._playhead_color).isValid() else ""
@@ -2368,6 +2391,7 @@ class WaveformPlayer(QMainWindow):
         refresh_playhead_color_button()
         playhead_color_layout.addWidget(playhead_color_button)
         playhead_color_layout.addWidget(playhead_reset_button)
+        _set_compact_field(playhead_color_row, 460)
         general_form.addRow(self._txt("Playhead kleur", "Playhead color"), playhead_color_row)
 
         playhead_width_combo = QComboBox()
@@ -2385,11 +2409,8 @@ class WaveformPlayer(QMainWindow):
             if abs(value - self._playhead_width) < 0.01:
                 selected_width_index = idx
         playhead_width_combo.setCurrentIndex(selected_width_index)
+        _set_compact_field(playhead_width_combo, 460)
         general_form.addRow(self._txt("Playhead dikte", "Playhead thickness"), playhead_width_combo)
-
-        report_button = QPushButton(self._txt("Probleem melden / Feature aanvragen", "Report issue / Request feature"))
-        report_button.clicked.connect(self.open_feedback_dialog)
-        general_form.addRow("", report_button)
 
         output_device_combo = QComboBox()
         output_devices = self._audio_output_devices()
@@ -2415,6 +2436,7 @@ class WaveformPlayer(QMainWindow):
             selected_output_index = output_device_combo.count() - 1
 
         output_device_combo.setCurrentIndex(selected_output_index)
+        _set_compact_field(output_device_combo, 620)
         audio_form.addRow(self._txt("Output device", "Output device"), output_device_combo)
 
         routing_combo = QComboBox()
@@ -2431,6 +2453,7 @@ class WaveformPlayer(QMainWindow):
             if mode == self._audio_routing_mode:
                 selected_routing_index = idx
         routing_combo.setCurrentIndex(selected_routing_index)
+        _set_compact_field(routing_combo, 520)
         audio_form.addRow(self._txt("Routing", "Routing"), routing_combo)
 
         matrix_enabled_checkbox = QCheckBox(self._txt("Gebruik matrix routing", "Use matrix routing"))
@@ -2438,6 +2461,7 @@ class WaveformPlayer(QMainWindow):
         audio_form.addRow("", matrix_enabled_checkbox)
 
         matrix_container = QWidget()
+        matrix_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         matrix_container_layout = QVBoxLayout(matrix_container)
         matrix_container_layout.setContentsMargins(0, 0, 0, 0)
         matrix_container_layout.setSpacing(6)
@@ -2505,17 +2529,20 @@ class WaveformPlayer(QMainWindow):
         matrix_grid_host.setMinimumHeight(34 + (matrix_size * 28))
 
         matrix_scroll = QScrollArea()
-        matrix_scroll.setWidgetResizable(False)
+        matrix_scroll.setWidgetResizable(True)
         matrix_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         matrix_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        matrix_scroll.setMinimumWidth(560)
+        matrix_scroll.setMinimumWidth(760)
         matrix_scroll.setMinimumHeight(240)
+        matrix_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         matrix_scroll.setWidget(matrix_grid_host)
         matrix_container_layout.addWidget(matrix_scroll)
         audio_form.addRow(self._txt("Routing matrix", "Routing matrix"), matrix_container)
 
         audio_preview_label = QLabel("")
         audio_preview_label.setWordWrap(True)
+        audio_preview_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        audio_preview_label.setMinimumHeight(90)
         audio_preview_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         audio_preview_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         audio_form.addRow(self._txt("Audio status", "Audio status"), audio_preview_label)
@@ -2608,6 +2635,7 @@ class WaveformPlayer(QMainWindow):
         midi_device_row_layout.setSpacing(6)
         midi_device_row_layout.addWidget(midi_device_combo, 1)
         midi_device_row_layout.addWidget(midi_refresh_button)
+        _set_compact_field(midi_device_row, 620)
         midi_form.addRow(self._txt("MIDI input", "MIDI input"), midi_device_row)
 
         midi_channel_combo = QComboBox()
@@ -2623,6 +2651,7 @@ class WaveformPlayer(QMainWindow):
                 channel_index = idx
                 break
         midi_channel_combo.setCurrentIndex(channel_index)
+        _set_compact_field(midi_channel_combo, 520)
         midi_form.addRow(self._txt("MIDI kanaal", "MIDI channel"), midi_channel_combo)
 
         midi_status_label = QLabel("")
@@ -2857,33 +2886,217 @@ class WaveformPlayer(QMainWindow):
             midi_mapping_scroll.setEnabled(False)
             midi_reset_defaults_button.setEnabled(False)
 
+        defaults_section_gap = QWidget()
+        defaults_section_gap.setFixedHeight(8)
+        general_form.addRow("", defaults_section_gap)
+
+        defaults_section_title = QLabel(self._txt("Standaardwaarden", "Defaults"))
+        defaults_section_title.setStyleSheet("font-weight: 600;")
+        general_form.addRow("", defaults_section_title)
+
+        defaults_note = QLabel(
+            self._txt("Deze instellingen gelden als opstart-standaard.", "These settings are startup defaults.")
+        )
+        defaults_note.setWordWrap(True)
+        defaults_note.setMaximumWidth(520)
+        general_form.addRow("", defaults_note)
+
         theme_combo = QComboBox()
         theme_combo.addItem(self._txt("Systeem", "System"), "system")
         theme_combo.addItem(self._txt("Donker", "Dark"), "dark")
         theme_combo.addItem(self._txt("Licht", "Light"), "light")
         theme_combo.setCurrentIndex(max(0, ("system", "dark", "light").index(self._default_theme_mode)))
-        defaults_form.addRow(self._txt("Default theme", "Default theme"), theme_combo)
+        _set_compact_field(theme_combo, 460)
+        general_form.addRow(self._txt("Default theme", "Default theme"), theme_combo)
 
         repeat_combo = QComboBox()
         repeat_combo.addItem(self._txt("Uit", "Off"), "off")
         repeat_combo.addItem(self._txt("Huidige track", "Current track"), "one")
         repeat_combo.addItem(self._txt("Hele playlist", "Whole playlist"), "all")
         repeat_combo.setCurrentIndex(max(0, ("off", "one", "all").index(self._default_repeat_mode)))
-        defaults_form.addRow(self._txt("Default repeat", "Default repeat"), repeat_combo)
+        _set_compact_field(repeat_combo, 460)
+        general_form.addRow(self._txt("Default repeat", "Default repeat"), repeat_combo)
 
         auto_next_checkbox = QCheckBox(self._txt("Standaard auto volgende track", "Default auto next track"))
         auto_next_checkbox.setChecked(self._default_auto_continue_enabled)
-        defaults_form.addRow("", auto_next_checkbox)
+        general_form.addRow("", auto_next_checkbox)
 
         autoplay_on_add_checkbox = QCheckBox(
             self._txt("Standaard starten bij toevoegen", "Default start when adding tracks")
         )
         autoplay_on_add_checkbox.setChecked(self._default_autoplay_on_add)
-        defaults_form.addRow("", autoplay_on_add_checkbox)
+        general_form.addRow("", autoplay_on_add_checkbox)
 
         follow_checkbox = QCheckBox(self._txt("Standaard playhead volgen", "Default follow playhead"))
         follow_checkbox.setChecked(self._default_follow_playhead)
-        defaults_form.addRow("", follow_checkbox)
+        general_form.addRow("", follow_checkbox)
+
+        tools_section_gap = QWidget()
+        tools_section_gap.setFixedHeight(8)
+        general_form.addRow("", tools_section_gap)
+
+        tools_title = QLabel(self._txt("Updates en Feedback", "Updates and Feedback"))
+        tools_title.setStyleSheet("font-weight: 600;")
+        general_form.addRow("", tools_title)
+
+        update_status_label = QLabel(self._txt(f"Huidige versie: {APP_VERSION}", f"Current version: {APP_VERSION}"))
+        update_status_label.setWordWrap(True)
+        update_status_label.setMaximumWidth(620)
+        general_form.addRow("", update_status_label)
+
+        update_buttons_row = QWidget()
+        update_buttons_layout = QHBoxLayout(update_buttons_row)
+        update_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        update_buttons_layout.setSpacing(8)
+        check_updates_button = QPushButton(self._txt("Controleer op updates", "Check for updates"))
+        download_update_button = QPushButton(self._txt("Download update", "Download update"))
+        report_button = QPushButton(self._txt("Probleem melden / Feature aanvragen", "Report issue / Request feature"))
+        download_update_button.setVisible(False)
+        download_update_button.setEnabled(False)
+        update_buttons_layout.addWidget(check_updates_button)
+        update_buttons_layout.addWidget(download_update_button)
+        update_buttons_layout.addWidget(report_button)
+        update_buttons_layout.addStretch(1)
+        _set_compact_field(update_buttons_row, 620)
+        general_form.addRow("", update_buttons_row)
+
+        update_target: dict[str, str] = {"url": ""}
+
+        def _version_tuple(version_text: str) -> tuple[int, ...]:
+            raw = str(version_text or "").strip()
+            if raw.lower().startswith("v"):
+                raw = raw[1:]
+            raw = raw.split("-", 1)[0]
+            parts: list[int] = []
+            for segment in raw.split("."):
+                segment = segment.strip()
+                if not segment:
+                    break
+                digits = "".join(ch for ch in segment if ch.isdigit())
+                if not digits:
+                    break
+                parts.append(int(digits))
+            return tuple(parts) if parts else (0,)
+
+        def _compare_versions(left: str, right: str) -> int:
+            # Returns: -1 if left < right, 0 if equal, 1 if left > right
+            left_parts = _version_tuple(left)
+            right_parts = _version_tuple(right)
+            size = max(len(left_parts), len(right_parts))
+            left_parts += (0,) * (size - len(left_parts))
+            right_parts += (0,) * (size - len(right_parts))
+            if left_parts < right_parts:
+                return -1
+            if left_parts > right_parts:
+                return 1
+            return 0
+
+        def _is_newer_version(latest: str, current: str) -> bool:
+            latest_parts = _version_tuple(latest)
+            current_parts = _version_tuple(current)
+            size = max(len(latest_parts), len(current_parts))
+            latest_parts += (0,) * (size - len(latest_parts))
+            current_parts += (0,) * (size - len(current_parts))
+            return latest_parts > current_parts
+
+        def _latest_release_info() -> tuple[str, str]:
+            request = urllib.request.Request(
+                RELEASE_LATEST_API_URL,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "User-Agent": "AudioPlayer",
+                },
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                payload = response.read().decode("utf-8", "replace")
+            data = json.loads(payload)
+            tag_name = str(data.get("tag_name") or data.get("name") or "").strip()
+            html_url = str(data.get("html_url") or RELEASES_LATEST_PAGE_URL).strip()
+
+            latest_version = tag_name
+            if latest_version.lower().startswith("v"):
+                latest_version = latest_version[1:]
+            latest_version = latest_version.strip()
+
+            download_url = ""
+            assets = data.get("assets")
+            if isinstance(assets, list):
+                dmg_urls: list[str] = []
+                for asset in assets:
+                    if not isinstance(asset, dict):
+                        continue
+                    asset_url = str(asset.get("browser_download_url") or "").strip()
+                    if asset_url.lower().endswith(".dmg"):
+                        dmg_urls.append(asset_url)
+                if dmg_urls:
+                    mac_urls = [url for url in dmg_urls if "mac" in url.lower()]
+                    download_url = mac_urls[0] if mac_urls else dmg_urls[0]
+            if not download_url:
+                download_url = html_url
+            return latest_version, download_url
+
+        def on_check_updates() -> None:
+            check_updates_button.setEnabled(False)
+            update_status_label.setText(self._txt("Updates controleren...", "Checking for updates..."))
+            download_update_button.setVisible(False)
+            download_update_button.setEnabled(False)
+            update_target["url"] = ""
+            try:
+                latest_version, download_url = _latest_release_info()
+                if not latest_version:
+                    update_status_label.setText(
+                        self._txt("Kon geen releaseversie lezen.", "Could not read latest release version.")
+                    )
+                else:
+                    comparison = _compare_versions(APP_VERSION, latest_version)
+                    if comparison < 0:
+                        update_target["url"] = download_url
+                        update_status_label.setText(
+                            self._txt(
+                                f"Update beschikbaar: {latest_version} (huidig: {APP_VERSION})",
+                                f"Update available: {latest_version} (current: {APP_VERSION})",
+                            )
+                        )
+                        download_update_button.setVisible(True)
+                        download_update_button.setEnabled(True)
+                    elif comparison == 0:
+                        update_status_label.setText(
+                            self._txt(
+                                f"Je gebruikt de nieuwste release ({APP_VERSION}).",
+                                f"You are using the latest release ({APP_VERSION}).",
+                            )
+                        )
+                    else:
+                        update_status_label.setText(
+                            self._txt(
+                                f"Je gebruikt een nieuwere ontwikkelversie ({APP_VERSION}) dan de nieuwste release ({latest_version}).",
+                                f"You are running a newer development version ({APP_VERSION}) than the latest release ({latest_version}).",
+                            )
+                        )
+            except Exception as exc:  # noqa: BLE001
+                update_status_label.setText(
+                    self._txt(
+                        f"Updatecheck mislukt: {exc}",
+                        f"Update check failed: {exc}",
+                    )
+                )
+            finally:
+                check_updates_button.setEnabled(True)
+
+        def on_download_update() -> None:
+            target_url = update_target.get("url", "").strip()
+            if not target_url:
+                return
+            if not QDesktopServices.openUrl(QUrl(target_url)):
+                QMessageBox.warning(
+                    dialog,
+                    self._txt("Download openen mislukt", "Failed to open download"),
+                    target_url,
+                )
+
+        check_updates_button.clicked.connect(on_check_updates)
+        download_update_button.clicked.connect(on_download_update)
+        report_button.clicked.connect(self.open_feedback_dialog)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         apply_button = button_box.addButton(self._txt("Toepassen", "Apply"), QDialogButtonBox.ButtonRole.ApplyRole)

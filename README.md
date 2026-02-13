@@ -6,7 +6,7 @@ Fast, visual, and routing-focused desktop playback for creators and audio profes
 
 [Download macOS DMG](https://github.com/clevrthings/AudioPlayer/releases/latest)
 
-Current development line: **0.0.2** (`dev` branch).
+Current development line: **0.1.0** (`dev` branch).
 
 Created and tested on macOS 15.6.1.
 
