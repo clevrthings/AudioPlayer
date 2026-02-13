@@ -2,37 +2,25 @@
 
 ![Stereo waveform in dark theme](assets/screenshots/main-dark-stereo.png)
 
-Fast, visual, and routing-focused desktop playback for creators and audio professionals.
+A fast, modern desktop audio player focused on waveform visibility, accurate navigation, and multichannel playback.
 
-[Download macOS DMG](https://github.com/clevrthings/AudioPlayer/releases/latest)
+[Download the latest macOS DMG](https://github.com/clevrthings/AudioPlayer/releases/latest)
 
-Current development line: **0.1.0** (`dev` branch).
+Current version: **0.1.0**
 
-Created and tested on macOS 15.6.1.
+## Core features
 
-## Why this player
+- Real-time waveform playback with smooth playhead tracking
+- Progressive waveform loading and waveform caching
+- Combined waveform view or split-per-channel view
+- Zoom, fit-to-track, click-to-seek, and drag navigation
+- Playlist with drag & drop, reordering, sorting, and quick switching
+- Repeat modes (`Off`, `One`, `All`) and auto-next behavior
+- MIDI learn + MIDI mapping for transport controls
+- Output device selection for playback
+- Light and dark themes with accent color customization
 
-- Large, responsive waveform view for accurate navigation
-- Smooth seeking with live playhead tracking
-- Powerful channel routing with matrix control up to 7.1.4 (12 channels)
-- Built for long sessions with multi-file playlists and fast switching
-
-## Waveform-first experience
-
-- Progressive waveform loading with background preloading and caching
-- Full-track **Fit** view on selection
-- Click or drag anywhere in the waveform to seek instantly
-- Zoom in/out for precision editing-style navigation
-- Combined waveform or separate per-channel waveform view
-
-## Advanced audio routing
-
-- Select your output device directly in the app
-- Route input channels to output channels via a routing matrix
-- Works with stereo, surround, and immersive layouts
-- Supports channel layouts up to **7.1.4 (12 channels)**
-
-## Supported file formats
+## Supported audio formats
 
 - WAV / WAVE
 - FLAC
@@ -43,28 +31,22 @@ Created and tested on macOS 15.6.1.
 - AAC
 - WMA
 
-Note: playback support for some compressed formats can depend on the OS multimedia backend.
-
-## Playlist and playback controls
-
-- Open one or multiple files
-- Drag-and-drop files into the playlist
-- Reorder and sort tracks
-- Previous, play/pause, next, and stop controls
-- Repeat modes: off, one, all
+Note: support for some compressed formats depends on the macOS multimedia backend.
 
 ## MIDI control
 
-- Enable MIDI input from the Preferences window
-- Select a MIDI input device
-- Listen on **All channels** or a specific MIDI channel (**1-16**)
-- Per-control MIDI mapping with manual note entry or **Learn**
-- One-click reset to default MIDI mappings
+MIDI can be configured in **Preferences > MIDI**:
 
-Mapped controls:
+- Enable/disable MIDI input
+- Select MIDI input device
+- Listen on **All channels** or a specific MIDI channel (`1-16`)
+- Map controls manually or with **Learn**
+- Reset MIDI mappings to defaults
+
+Available mappings:
 
 - Previous track
-- Play/Pause (toggle)
+- Play / Pause (toggle)
 - Play
 - Pause
 - Next track
@@ -72,27 +54,16 @@ Mapped controls:
 - Repeat mode
 - Auto next toggle
 
-Default MIDI note mapping:
-
-- Previous track: `1`
-- Play/Pause: `6`
-- Pause: `3`
-- Next track: `2`
-- Stop: `4`
-
 ## Screenshots
 
-### Multichannel waveform (dark theme)
+### Multichannel waveform (dark)
 ![Multichannel waveform in dark theme](assets/screenshots/main-dark-multichannel.png)
 
-### Stereo waveform (dark theme)
-![Stereo waveform in dark theme](assets/screenshots/main-dark-stereo.png)
-
-### Stereo waveform (light theme)
+### Stereo waveform (light)
 ![Stereo waveform in light theme](assets/screenshots/main-light-stereo.png)
 
-### Audio routing matrix
-![Audio routing matrix](assets/screenshots/preferences-audio-routing.png)
+### MIDI mapping in Preferences
+![MIDI mapping in Preferences](assets/screenshots/preferences-midi.png)
 
 ---
 
