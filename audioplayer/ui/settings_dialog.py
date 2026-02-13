@@ -5,6 +5,17 @@ try:
 except Exception:  # noqa: BLE001
     mido = None
 
+try:
+    import rtmidi  # type: ignore[import-not-found]  # noqa: F401
+except Exception:  # noqa: BLE001
+    rtmidi = None  # type: ignore[assignment]
+
+if mido is not None and rtmidi is not None:
+    try:
+        mido.set_backend("mido.backends.rtmidi")
+    except Exception:  # noqa: BLE001
+        pass
+
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QColor, QDesktopServices
 from PySide6.QtMultimedia import QMediaDevices

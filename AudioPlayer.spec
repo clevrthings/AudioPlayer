@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_all
+
+rtmidi_datas, rtmidi_binaries, rtmidi_hiddenimports = collect_all('rtmidi')
+mido_datas, mido_binaries, mido_hiddenimports = collect_all('mido')
+
 a = Analysis(
     ['app.py'],
     pathex=[],
-    binaries=[],
-    datas=[('assets/app_icon.png', 'assets')],
-    hiddenimports=[],
+    binaries=rtmidi_binaries + mido_binaries,
+    datas=[('assets/app_icon.png', 'assets')] + rtmidi_datas + mido_datas,
+    hiddenimports=['rtmidi', 'rtmidi._rtmidi', 'mido.backends.rtmidi']
+        + rtmidi_hiddenimports + mido_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
